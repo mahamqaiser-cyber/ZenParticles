@@ -7,22 +7,22 @@ import { Landmark } from '../types';
 export const HandTracker: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { setHandData, showDebug } = useStore();
-  const [loading, setLoading] = useState(true);
+  const { setHandData, showDebug, isCameraActive } = useStore();
+  
+  // State to track if the AI model is ready
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+  // Ref to hold the landmarker instance so it persists across renders without re-initialization
+  const landmarkerRef = useRef<HandLandmarker | null>(null);
 
+  // 1. Initialize MediaPipe Model (Runs once)
   useEffect(() => {
-    let handLandmarker: HandLandmarker | null = null;
-    let animationFrameId: number;
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    let drawingUtils: DrawingUtils | null = null;
-
-    const setup = async () => {
+    const setupModel = async () => {
       try {
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
         );
         
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
             delegate: "GPU"
@@ -34,8 +34,42 @@ export const HandTracker: React.FC = () => {
           minTrackingConfidence: 0.5
         });
 
-        // Start Camera
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        landmarkerRef.current = landmarker;
+        setIsModelLoaded(true);
+      } catch (e) {
+        console.error("Error loading hand tracking model:", e);
+      }
+    };
+
+    setupModel();
+
+    return () => {
+      landmarkerRef.current?.close();
+    };
+  }, []);
+
+  // 2. Manage Camera Stream & Prediction Loop
+  useEffect(() => {
+    if (!isCameraActive || !isModelLoaded) {
+      // If camera is stopped, ensure we clear the hand data so the app knows hands are gone
+      setHandData({
+        leftHandOpenness: 0,
+        rightHandOpenness: 0,
+        leftHandPinch: 0,
+        rightHandPinch: 0,
+        leftHandLandmarks: [],
+        rightHandLandmarks: [],
+        isPresent: false
+      });
+      return;
+    }
+
+    let animationFrameId: number;
+    let stream: MediaStream | null = null;
+
+    const startCamera = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
               width: 640, 
               height: 480,
@@ -45,49 +79,37 @@ export const HandTracker: React.FC = () => {
         
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          // Ensure video plays
           videoRef.current.onloadedmetadata = () => {
             videoRef.current?.play();
+            predictWebcam();
           };
-          videoRef.current.addEventListener('loadeddata', () => {
-             setLoading(false);
-             predictWebcam();
-          });
         }
-        
-        if (canvasRef.current) {
-           const ctx = canvasRef.current.getContext('2d');
-           if (ctx) drawingUtils = new DrawingUtils(ctx);
-        }
-
       } catch (e) {
-        console.error("Error starting hand tracking:", e);
-        setLoading(false);
+        console.error("Error starting camera:", e);
       }
     };
 
     const predictWebcam = () => {
-      if (!handLandmarker || !videoRef.current || !canvasRef.current) return;
+      // Check if active, model exists, and video is playing
+      if (!isCameraActive || !landmarkerRef.current || !videoRef.current || !canvasRef.current) return;
       
       // Ensure dimensions match
-      if (videoRef.current.videoWidth !== canvasRef.current.width) {
+      if (videoRef.current.videoWidth > 0 && videoRef.current.videoWidth !== canvasRef.current.width) {
           canvasRef.current.width = videoRef.current.videoWidth;
           canvasRef.current.height = videoRef.current.videoHeight;
       }
 
       const startTimeMs = performance.now();
       if (videoRef.current.currentTime > 0 && !videoRef.current.paused && !videoRef.current.ended) {
-          const result = handLandmarker.detectForVideo(videoRef.current, startTimeMs);
+          const result = landmarkerRef.current.detectForVideo(videoRef.current, startTimeMs);
           
           const ctx = canvasRef.current.getContext('2d');
           if (ctx) {
              ctx.save();
              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
              
-             // Draw user feedback
              if (result.landmarks) {
                 for (const landmarks of result.landmarks) {
-                  // Manually draw connections if DrawingUtils fails or for custom style
                   drawSimpleSkeleton(ctx, landmarks);
                 }
              }
@@ -106,29 +128,22 @@ export const HandTracker: React.FC = () => {
             isPresent = true;
             
             result.landmarks.forEach((landmarks, index) => {
-               // Determine handedness if available, otherwise guess by index
-               // Note: MediaPipe "Left" means the hand on the left in the image (which is user's right hand if not mirrored)
-               // But since we mirror the video visually, we want to align logic.
-               const handedness = result.handedness[index]?.[0]?.categoryName; // "Left" or "Right"
+               const handedness = result.handedness[index]?.[0]?.categoryName; 
                
                const wrist = landmarks[0];
                const thumbTip = landmarks[4];
                const indexTip = landmarks[8];
                const middleTip = landmarks[12];
-               const middleMcp = landmarks[9]; // Middle finger knuckle
+               const middleMcp = landmarks[9]; 
 
-               // 1. ROBUST OPENNESS CALCULATION
                const distWristToKnuckle = distance(wrist, middleMcp);
                const distWristToTip = distance(wrist, middleTip);
                
-               const ratio = distWristToTip / (distWristToKnuckle || 0.1); // avoid div 0
+               const ratio = distWristToTip / (distWristToKnuckle || 0.1); 
                const openVal = clamp((ratio - 1.0) / 0.8, 0, 1);
 
-               // 2. PINCH CALCULATION
                const distPinch = distance(thumbTip, indexTip);
                const normPinch = distPinch / (distWristToKnuckle || 0.1);
-               // If normPinch is small (< 0.2), it's a pinch (1.0). If large (> 0.5), it's open (0.0)
-               // Invert logic: Small distance = High Pinch
                const pinchVal = clamp(1 - (normPinch * 3), 0, 1);
                
                if (handedness === 'Right') {
@@ -157,17 +172,18 @@ export const HandTracker: React.FC = () => {
       animationFrameId = requestAnimationFrame(predictWebcam);
     };
 
-    setup();
+    startCamera();
 
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-         tracks.forEach(t => t.stop());
-      }
       cancelAnimationFrame(animationFrameId);
-      if (handLandmarker) handLandmarker.close();
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
     };
-  }, [setHandData]);
+  }, [isCameraActive, isModelLoaded, setHandData]);
 
   // Helper math functions
   const distance = (p1: {x:number, y:number}, p2: {x:number, y:number}) => {
@@ -183,7 +199,6 @@ export const HandTracker: React.FC = () => {
       ctx.strokeStyle = '#00ff9d';
       ctx.fillStyle = '#ff0066';
 
-      // Connect points (simplified hand skeleton indices)
       const connections = [
           [0,1], [1,2], [2,3], [3,4], // Thumb
           [0,5], [5,6], [6,7], [7,8], // Index
@@ -210,23 +225,29 @@ export const HandTracker: React.FC = () => {
 
   return (
     <div className={`fixed bottom-4 right-4 z-50 transition-opacity duration-300 ${showDebug ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-      <div className="relative rounded-lg overflow-hidden border-2 border-white/20 bg-black/50 shadow-2xl">
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            muted 
-            className="w-48 h-36 object-cover"
-            style={{ transform: 'scaleX(-1)' }} 
-          />
-          <canvas 
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full"
-            style={{ transform: 'scaleX(-1)' }}
-          />
-          {loading && (
+      <div className="relative rounded-lg overflow-hidden border-2 border-white/20 bg-black/50 shadow-2xl w-48 h-36 flex items-center justify-center">
+          {isCameraActive ? (
+            <>
+              <video 
+                ref={videoRef} 
+                playsInline 
+                muted 
+                className="w-full h-full object-cover"
+                style={{ transform: 'scaleX(-1)' }} 
+              />
+              <canvas 
+                ref={canvasRef}
+                className="absolute inset-0 w-full h-full"
+                style={{ transform: 'scaleX(-1)' }}
+              />
+            </>
+          ) : (
+            <div className="text-white/50 text-xs font-mono">CAMERA OFF</div>
+          )}
+          
+          {!isModelLoaded && isCameraActive && (
              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
-                <div className="text-white text-xs font-mono animate-pulse">Init Vision...</div>
+                <div className="text-white text-xs font-mono animate-pulse">Loading AI...</div>
              </div>
           )}
       </div>

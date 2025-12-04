@@ -1,11 +1,12 @@
+
 import React, { useState } from 'react';
 import { useStore } from '../store';
 import { ShapeType } from '../types';
 import { generateTheme } from '../services/geminiService';
-import { Palette, Hand, Sparkles, AlertCircle, Maximize2 } from 'lucide-react';
+import { Palette, Hand, Sparkles, AlertCircle, Maximize2, Video, VideoOff } from 'lucide-react';
 
 export const Controls: React.FC = () => {
-  const { currentShape, setShape, theme, setTheme, handData, toggleDebug, showDebug } = useStore();
+  const { currentShape, setShape, theme, setTheme, handData, toggleDebug, showDebug, isCameraActive, toggleCamera } = useStore();
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -32,14 +33,24 @@ export const Controls: React.FC = () => {
         </div>
         
         <div className="flex gap-2">
+            <button
+                onClick={toggleCamera}
+                className={`flex items-center gap-2 px-3 py-2 rounded-full backdrop-blur-md transition-colors ${isCameraActive ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
+                title={isCameraActive ? "Stop Camera" : "Start Camera"}
+            >
+                {isCameraActive ? <Video size={16} /> : <VideoOff size={16} />}
+                <span className="hidden sm:inline text-xs font-medium uppercase tracking-wider">{isCameraActive ? 'Cam On' : 'Cam Off'}</span>
+            </button>
+
             <button 
                 onClick={toggleDebug} 
                 className={`p-2 rounded-full backdrop-blur-md transition-colors ${showDebug ? 'bg-white/20 text-white' : 'bg-black/20 text-white/50 hover:bg-white/10'}`}
-                title="Toggle Camera View"
+                title="Toggle Debug View"
             >
                 <Maximize2 size={20} />
             </button>
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-md ${handData.isPresent ? 'bg-green-500/20 text-green-200' : 'bg-red-500/20 text-red-200'}`}>
+            
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-full backdrop-blur-md transition-all ${handData.isPresent ? 'bg-green-500/20 text-green-200' : 'bg-white/5 text-white/30'}`}>
                 <Hand size={16} />
                 <span className="text-xs font-medium tracking-wide">
                     {handData.isPresent ? 'HAND DETECTED' : 'NO HANDS'}
@@ -124,12 +135,23 @@ export const Controls: React.FC = () => {
       </div>
       
       {/* Instructions Overlay if No Hand */}
-      {!handData.isPresent && (
+      {!handData.isPresent && isCameraActive && (
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
              <div className="bg-black/40 backdrop-blur-sm p-6 rounded-3xl border border-white/5">
                 <Hand className="w-12 h-12 text-white/20 mx-auto mb-4 animate-pulse" />
                 <h2 className="text-xl text-white font-light">Show your hands</h2>
                 <p className="text-white/50 text-sm mt-2">Open palms to expand • Pinch to pulse</p>
+             </div>
+        </div>
+      )}
+      
+      {/* Instruction if Camera is Off */}
+      {!isCameraActive && (
+         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
+             <div className="bg-black/40 backdrop-blur-sm p-6 rounded-3xl border border-white/5">
+                <VideoOff className="w-12 h-12 text-white/20 mx-auto mb-4" />
+                <h2 className="text-xl text-white font-light">Camera Paused</h2>
+                <p className="text-white/50 text-sm mt-2">Enable camera to interact</p>
              </div>
         </div>
       )}

@@ -16,6 +16,9 @@ interface AppState {
 
   showDebug: boolean;
   toggleDebug: () => void;
+
+  isCameraActive: boolean;
+  toggleCamera: () => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -43,4 +46,7 @@ export const useStore = create<AppState>((set) => ({
 
   showDebug: false,
   toggleDebug: () => set((state) => ({ showDebug: !state.showDebug })),
+
+  isCameraActive: true,
+  toggleCamera: () => set((state) => ({ isCameraActive: !state.isCameraActive })),
 }));

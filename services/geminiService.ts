@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, SchemaType } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { ParticleTheme } from '../types';
 
 export const generateTheme = async (prompt: string): Promise<ParticleTheme | null> => {
